@@ -1,17 +1,76 @@
 """Аналитическое ядро демо-прототипа."""
+import json
+import shutil
+import subprocess
+
 import numpy as np
-from scipy.io import wavfile
+
+# Кодеки со сжатием с потерями. Для них часть проверок неинформативна.
+LOSSY_CODECS = {"mp3", "aac", "wmav1", "wmav2", "vorbis", "opus",
+                "amr_nb", "amr_wb", "gsm", "ac3", "atrac3"}
 
 
-def load_wav(path):
-    """Читает WAV, возвращает (сигнал float -1..1, частота дискретизации)."""
-    sr, x = wavfile.read(path)
-    if x.ndim > 1:
-        x = x.mean(axis=1)
-    x = x.astype(np.float64)
-    if np.issubdtype(wavfile.read(path)[1].dtype, np.integer):
-        x = x / 32768.0
-    return x, sr
+def ffmpeg_bin(name="ffmpeg"):
+    """Ищет ffmpeg/ffprobe в системе, иначе берёт из пакета imageio-ffmpeg."""
+    path = shutil.which(name)
+    if path:
+        return path
+    if name == "ffmpeg":
+        try:
+            import imageio_ffmpeg
+            return imageio_ffmpeg.get_ffmpeg_exe()
+        except ImportError:
+            pass
+    return None
+
+
+def probe_format(path):
+    """Сведения о контейнере и кодеке через ffprobe. Идут в отчёт."""
+    exe = ffmpeg_bin("ffprobe")
+    if exe is None:
+        return {}
+    cmd = [exe, "-v", "quiet", "-print_format", "json",
+           "-show_format", "-show_streams", path]
+    out = subprocess.run(cmd, stdout=subprocess.PIPE, check=True).stdout
+    data = json.loads(out)
+    audio = [s for s in data.get("streams", []) if s.get("codec_type") == "audio"]
+    if not audio:
+        return {}
+    stream = audio[0]
+    codec = stream.get("codec_name", "")
+    return {
+        "container": data.get("format", {}).get("format_name", ""),
+        "codec": codec,
+        "sample_rate": int(stream.get("sample_rate", 0)),
+        "channels": stream.get("channels", 0),
+        "bit_rate": data.get("format", {}).get("bit_rate", ""),
+        "lossy": codec in LOSSY_CODECS,
+    }
+
+
+def load_audio(path):
+    """Читает аудио любого формата, возвращает (моно float, частота)."""
+    try:
+        import soundfile as sf
+        x, sr = sf.read(path, always_2d=True, dtype="float64")
+        return x.mean(axis=1), sr
+    except Exception:
+        return load_via_ffmpeg(path)
+
+
+def load_via_ffmpeg(path):
+    """Резерв для того, что не читает libsndfile: m4a, wma, amr, opus и прочее."""
+    exe = ffmpeg_bin("ffmpeg")
+    if exe is None:
+        raise RuntimeError(
+            "Файл не прочитан: нет ни soundfile, ни ffmpeg. "
+            "Выполните ./run.sh — он поставит зависимости сам.")
+    info = probe_format(path)
+    sr = info.get("sample_rate") or 44100
+    cmd = [exe, "-v", "quiet", "-i", path,
+           "-f", "f32le", "-ac", "1", "-ar", str(sr), "-"]
+    raw = subprocess.run(cmd, stdout=subprocess.PIPE, check=True).stdout
+    return np.frombuffer(raw, dtype=np.float32).astype(np.float64), sr
 
 
 # ---------- детектор синтеза ----------

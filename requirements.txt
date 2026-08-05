@@ -4,3 +4,5 @@ matplotlib
 PySide6
 onnxruntime
 python-docx
+soundfile
+imageio-ffmpeg

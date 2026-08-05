@@ -29,6 +29,7 @@ class MainWindow(QMainWindow):
         self.times = None
         self.probs = None
         self.checks = None
+        self.info = {}
         self.session = self.load_model()
 
         self.figure = Figure(figsize=(9, 5))
@@ -69,14 +70,19 @@ class MainWindow(QMainWindow):
         return None
 
     def open_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Выберите файл", "", "WAV (*.wav)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Выберите файл", "",
+            "Аудио (*.wav *.mp3 *.flac *.ogg *.opus *.m4a *.aac *.wma *.aiff *.amr);;Все файлы (*)")
         if not path:
             return
         self.wav_path = path
-        self.signal, self.sr = analysis.load_wav(path)
+        self.signal, self.sr = analysis.load_audio(path)
+        self.info = analysis.probe_format(path)
+        note = " — сжатие с потерями" if self.info.get("lossy") else ""
         self.text.setPlainText(
             f"Загружен {os.path.basename(path)}\n"
-            f"{self.sr} Гц, {len(self.signal) / self.sr:.2f} с"
+            f"{self.info.get('codec', '?')}{note}, {self.sr} Гц, "
+            f"{len(self.signal) / self.sr:.2f} с"
         )
         self.draw()
 
@@ -135,7 +141,7 @@ class MainWindow(QMainWindow):
         intervals = analysis.intervals_above(self.times, self.probs, THRESHOLD)
         report.build_report(path, self.wav_path, self.sr,
                             len(self.signal) / self.sr, self.checks, intervals,
-                            THRESHOLD, self.model_name, png)
+                            THRESHOLD, self.model_name, png, self.info)
         self.text.append(f"\nОтчёт сохранён: {path}")
 
 
@@ -144,3 +150,4 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+    

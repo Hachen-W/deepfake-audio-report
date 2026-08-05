@@ -1,56 +1,78 @@
-# Прототип анализа фонограмм на признаки синтезированной речи
+"""Формирование отчёта в DOCX."""
+import hashlib
+import os
+from datetime import datetime
 
-Демо-каркас: загрузка WAV → спектрограмма → скользящая оценка вероятности синтеза →
-классические проверки → отчёт DOCX.
+from docx import Document
+from docx.shared import Inches
 
-## Запуск
 
-```bash
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
-```
+def file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-## Важно про режим ЗАГЛУШКИ
 
-Если рядом с `app.py` нет файла `model.onnx`, программа работает на функции
-`baseline_score` — это **не детектор**, а две простые спектральные характеристики,
-нужные только чтобы интерфейс не был пустым. В заголовке окна и в отчёте это
-написано явно. **На защите нельзя выдавать её результаты за детектирование.**
+def build_report(out_path, wav_path, sr, duration, checks, intervals,
+                 threshold, model_name, plot_png=None, info=None):
+    doc = Document()
+    doc.add_heading("Заключение по исследованию фонограммы", level=0)
+    doc.add_paragraph(f"Дата формирования: {datetime.now():%d.%m.%Y %H:%M}")
 
-## Подключение настоящей модели
+    doc.add_heading("1. Объект исследования", level=1)
+    table = doc.add_table(rows=0, cols=2)
+    table.style = "Table Grid"
+    rows = [
+        ("Имя файла", os.path.basename(wav_path)),
+        ("Размер, байт", str(os.path.getsize(wav_path))),
+        ("SHA-256", file_sha256(wav_path)),
+        ("Контейнер / кодек", f"{(info or {}).get('container', '?')} / {(info or {}).get('codec', '?')}"),
+        ("Частота дискретизации, Гц", str(sr)),
+        ("Длительность, с", f"{duration:.2f}"),
+    ]
+    for name, value in rows:
+        cells = table.add_row().cells
+        cells[0].text = name
+        cells[1].text = value
 
-1. Взять предобученный анти-спуфинг: AASIST или RawNet2 (обучены на ASVspoof2019 LA),
-   либо wav2vec2-модель детекции с Hugging Face.
-2. Экспортировать в ONNX (`torch.onnx.export`), положить как `model.onnx`.
-3. Проверить, что вход совпадает: в `analysis.onnx_score` подаётся сырой сигнал
-   формы `(1, N)` float32. Если модель ждёт мел-спектрограмму — поправить эту
-   функцию, остальное менять не нужно.
-4. Проверить лицензию весов: часть моделей идёт под non-commercial.
+    doc.add_heading("2. Методика", level=1)
+    doc.add_paragraph(
+        f"Модель детектирования: {model_name}. "
+        f"Окно анализа 2.0 с, шаг 0.5 с, порог принятия решения {threshold}."
+    )
 
-## Файлы
+    doc.add_heading("3. Признаки синтезированной речи", level=1)
+    if plot_png:
+        doc.add_picture(plot_png, width=Inches(6))
+    if intervals:
+        doc.add_paragraph("Участки с оценкой выше порога:")
+        for t0, t1 in intervals:
+            doc.add_paragraph(f"{t0:.2f} — {t1:.2f} с", style="List Bullet")
+    else:
+        doc.add_paragraph("Участков с оценкой выше порога не выявлено.")
 
-- `analysis.py` — ядро: загрузка, скользящие вероятности, классические проверки
-- `report.py` — генерация DOCX
-- `app.py` — интерфейс
+    doc.add_heading("4. Классические признаки обработки", level=1)
+    doc.add_paragraph(f"Смещение постоянной составляющей: {checks['dc_offset']:.6f}")
+    doc.add_paragraph(f"Частота среза спектра: {checks['cutoff_hz']:.0f} Гц")
+    doc.add_paragraph(f"Участков с постоянным значением отсчётов: {len(checks['constant_runs'])}")
+    doc.add_paragraph(f"Пар повторяющихся фрагментов: {len(checks['repeats'])}")
+    if (info or {}).get("lossy"):
+        doc.add_paragraph(
+            "Фонограмма представлена в формате со сжатием с потерями. Частота среза "
+            "спектра в этом случае объясняется работой кодека и не свидетельствует "
+            "о редактировании. Исследование выполнено по декодированному сигналу."
+        )
 
-## План на 10 дней
+    doc.add_heading("5. Ограничения", level=1)
+    doc.add_paragraph(
+        "Результат носит вероятностный характер и не является выводом о подлинности "
+        "записи. Прототип не прошёл валидацию по методике экспертного учреждения; "
+        "оценки на фонограммах, полученных неизвестными системами синтеза, "
+        "могут быть занижены."
+    )
 
-| Дни | Что |
-|---|---|
-| 1 | Запустить каркас, проверить на своих WAV |
-| 2–3 | Подключить реальную модель, отладить формат входа |
-| 4 | Собрать мини-набор: 20 подлинных + 20 синтезированных любым TTS |
-| 5 | Посчитать accuracy и EER на этом наборе, подобрать порог |
-| 6 | Доработать отчёт под формат, который ждёт научрук |
-| 7 | Прогнать полный сценарий демо от начала до конца 5 раз подряд |
-| 8 | Записать видео демо — страховка, если на защите что-то упадёт |
-| 9 | Презентация |
-| 10 | Буфер |
-
-## Известные ограничения
-
-- `find_repeats` даёт ложные срабатывания на тональных и стационарных сигналах;
-  для речи порог 0.999 работает адекватно.
-- Поддерживается только WAV. Для MP3 нужен дополнительный декодер.
-- Оценка не является выводом о подлинности записи.
+    doc.save(out_path)
+    return out_path
+  

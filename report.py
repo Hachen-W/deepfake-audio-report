@@ -16,7 +16,7 @@ def file_sha256(path):
 
 
 def build_report(out_path, wav_path, sr, duration, checks, intervals,
-                 threshold, model_name, plot_png=None):
+                 threshold, model_name, plot_png=None, info=None):
     doc = Document()
     doc.add_heading("Заключение по исследованию фонограммы", level=0)
     doc.add_paragraph(f"Дата формирования: {datetime.now():%d.%m.%Y %H:%M}")
@@ -28,6 +28,7 @@ def build_report(out_path, wav_path, sr, duration, checks, intervals,
         ("Имя файла", os.path.basename(wav_path)),
         ("Размер, байт", str(os.path.getsize(wav_path))),
         ("SHA-256", file_sha256(wav_path)),
+        ("Контейнер / кодек", f"{(info or {}).get('container', '?')} / {(info or {}).get('codec', '?')}"),
         ("Частота дискретизации, Гц", str(sr)),
         ("Длительность, с", f"{duration:.2f}"),
     ]
@@ -57,6 +58,12 @@ def build_report(out_path, wav_path, sr, duration, checks, intervals,
     doc.add_paragraph(f"Частота среза спектра: {checks['cutoff_hz']:.0f} Гц")
     doc.add_paragraph(f"Участков с постоянным значением отсчётов: {len(checks['constant_runs'])}")
     doc.add_paragraph(f"Пар повторяющихся фрагментов: {len(checks['repeats'])}")
+    if (info or {}).get("lossy"):
+        doc.add_paragraph(
+            "Фонограмма представлена в формате со сжатием с потерями. Частота среза "
+            "спектра в этом случае объясняется работой кодека и не свидетельствует "
+            "о редактировании. Исследование выполнено по декодированному сигналу."
+        )
 
     doc.add_heading("5. Ограничения", level=1)
     doc.add_paragraph(
