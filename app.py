@@ -39,7 +39,7 @@ class MainWindow(QMainWindow):
         self.text.setMaximumHeight(160)
         self.status = QLabel(f"Модель: {self.model_name}")
 
-        open_btn = QPushButton("Открыть WAV")
+        open_btn = QPushButton("Открыть аудио")
         open_btn.clicked.connect(self.open_file)
         run_btn = QPushButton("Анализ")
         run_btn.clicked.connect(self.run_analysis)
