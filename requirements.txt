@@ -1,0 +1,6 @@
+numpy
+scipy
+matplotlib
+PySide6
+onnxruntime
+python-docx
