@@ -6,3 +6,5 @@ onnxruntime
 python-docx
 soundfile
 imageio-ffmpeg
+requests
+websocket-client

@@ -1,9 +1,12 @@
 """Аналитическое ядро демо-прототипа."""
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 
 import numpy as np
+from matplotlib import mlab
 
 # Кодеки со сжатием с потерями. Для них часть проверок неинформативна.
 LOSSY_CODECS = {"mp3", "aac", "wmav1", "wmav2", "vorbis", "opus",
@@ -48,6 +51,70 @@ def probe_format(path):
     }
 
 
+def probe_streams(path):
+    """Список потоков файла. На нечитаемом файле возвращает пустой результат."""
+    if shutil.which("ffprobe") is None:
+        return {}
+    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+           "-show_streams", path]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE)
+    if result.returncode != 0:
+        return {}
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        return {}
+
+
+def list_audio_streams(path):
+    """Все звуковые дорожки файла — у видео их бывает несколько."""
+    data = probe_streams(path)
+    streams = []
+    for stream in data.get("streams", []):
+        if stream.get("codec_type") == "audio":
+            streams.append({
+                "index": len(streams),
+                "codec": stream.get("codec_name", ""),
+                "channels": stream.get("channels", 0),
+                "sample_rate": int(stream.get("sample_rate", 0)),
+                "language": stream.get("tags", {}).get("language", ""),
+            })
+    return streams
+
+
+def is_video(path):
+    """Есть ли в файле видеопоток (обложки в mp3 не считаются)."""
+    for stream in probe_streams(path).get("streams", []):
+        if (stream.get("codec_type") == "video"
+                and stream.get("codec_name") not in ("mjpeg", "png", "bmp")):
+            return True
+    return False
+
+
+def extract_audio(path, index=0):
+    """Достаёт звуковую дорожку из видео без перекодирования.
+
+    Поток копируется как есть, чтобы не добавить своих артефактов поверх
+    исследуемых. Контейнер mka принимает почти любой кодек.
+    Возвращает путь к временному файлу — удалять его должен вызывающий.
+    """
+    exe = ffmpeg_bin("ffmpeg")
+    if exe is None:
+        raise RuntimeError("Для извлечения звука нужен ffmpeg")
+
+    handle, out_path = tempfile.mkstemp(suffix=".mka")
+    os.close(handle)
+    cmd = [exe, "-v", "quiet", "-y", "-i", path,
+           "-map", f"0:a:{index}", "-acodec", "copy", "-vn", out_path]
+    result = subprocess.run(cmd)
+    if result.returncode != 0 or os.path.getsize(out_path) == 0:
+        # Некоторые кодеки не ложатся в контейнер — тогда декодируем
+        cmd = [exe, "-v", "quiet", "-y", "-i", path,
+               "-map", f"0:a:{index}", "-acodec", "pcm_s16le", "-vn", out_path]
+        subprocess.run(cmd, check=True)
+    return out_path
+
+
 def load_audio(path):
     """Читает аудио любого формата, возвращает (моно float, частота)."""
     try:
@@ -71,6 +138,18 @@ def load_via_ffmpeg(path):
            "-f", "f32le", "-ac", "1", "-ar", str(sr), "-"]
     raw = subprocess.run(cmd, stdout=subprocess.PIPE, check=True).stdout
     return np.frombuffer(raw, dtype=np.float32).astype(np.float64), sr
+
+
+def spectrogram_db(x, sr, dynamic_range=100.0):
+    """Спектрограмма в дБ.
+
+    Тишина даёт нулевую мощность, поэтому вместо логарифма от нуля
+    подставляем нижнюю границу диапазона — делить на ноль не приходится.
+    """
+    spec, freqs, times = mlab.specgram(x, Fs=sr)
+    top = spec.max()
+    floor = top * 10 ** (-dynamic_range / 10) if top > 0 else 1e-20
+    return 10 * np.log10(np.maximum(spec, floor)), freqs, times
 
 
 # ---------- детектор синтеза ----------
